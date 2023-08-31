@@ -32,7 +32,7 @@ def process_amass():
     # left wrist, right wrist, left thigh, right thigh, head, pelvis
     # vi_mask = torch.tensor([1961, 5424, 876, 4362, 411, 3021])
     # ji_mask = torch.tensor([18, 19, 1, 2, 15, 0])
-    vi_mask = torch.tensor([1961, 5424, 4662, 1177, 411, 3021]) # TIP
+    vi_mask = torch.tensor([1961, 5424, 1177, 4662, 411, 3021]) # TIP
     ji_mask = torch.tensor([18, 19, 4, 5, 15, 0])
     body_model = ParametricModel(config.og_smpl_model_path)
 
@@ -129,7 +129,7 @@ def process_dipimu(split="test"):
     # left wrist, right wrist, left thigh, right thigh, head, pelvis
     # vi_mask = torch.tensor([1961, 5424, 876, 4362, 411, 3021])
     # ji_mask = torch.tensor([18, 19, 1, 2, 15, 0])
-    vi_mask = torch.tensor([1961, 5424, 4662, 1177, 411, 3021]) # TIP
+    vi_mask = torch.tensor([1961, 5424, 1177, 4662, 411, 3021]) # TIP
     ji_mask = torch.tensor([18, 19, 4, 5, 15, 0])
 
     for subject_name in test_split:
