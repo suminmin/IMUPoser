@@ -2,6 +2,8 @@ from pathlib import Path
 import torch
 import datetime
 
+DATASET_DIR = ""
+
 class Config:
     def __init__(self, experiment=None, model=None, project_root_dir=None,
                  joints_set=None, loss_type=None, mkdir=True, normalize=False,
@@ -40,8 +42,10 @@ class Config:
         self.smpl_model_path = self.root_dir / "src/imuposer/smpl/model.pkl"
         self.og_smpl_model_path = self.root_dir / "src/imuposer/smpl/basicmodel_m_lbs_10_207_0_v1.0.0.pkl"
         
-        self.raw_dip_path = self.root_dir / "data/raw/DIP_IMU"
-        self.raw_amass_path = self.root_dir / "data/raw/AMASS"
+        # self.raw_dip_path = self.root_dir / "data/raw/DIP_IMU"
+        # self.raw_amass_path = self.root_dir / "data/raw/AMASS"
+        self.raw_dip_path = DATASET_DIR / "data/raw/DIP_IMU"
+        self.raw_amass_path = DATASET_DIR / "data/raw/AMASS"
 
         self.processed_imu_poser = self.root_dir / "data/processed_imuposer"
         self.processed_imu_poser_25fps = self.root_dir / "data/processed_imuposer_25fps"
