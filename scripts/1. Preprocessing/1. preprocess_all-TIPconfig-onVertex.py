@@ -13,12 +13,35 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 import glob
+import open3d
 
+import sys
+sys.path.append("../../src")
 from imuposer.config import Config, amass_datasets
 from imuposer.smpl.parametricModel import ParametricModel
 from imuposer import math
 
 config = Config(project_root_dir="../../")
+
+
+def create_mesh(face, vert):
+    mesh = open3d.geometry.TriangleMesh()
+    mesh.vertices = open3d.utility.Vector3dVector(vert)
+    mesh.triangles = open3d.utility.Vector3iVector(face)
+    mesh.compute_vertex_normals()
+    return mesh
+
+
+def get_coordinate(x_vec, y_vec):
+    ux_vec = x_vec / np.linalg.norm(x_vec)
+    uy_vec = y_vec / np.linalg.norm(y_vec)
+
+    z_vec = np.cross( ux_vec, uy_vec )
+    z_vec = z_vec / np.linalg.norm(z_vec)
+
+    rmat = np.vstack([ux_vec, uy_vec, z_vec]).T
+    return rmat / np.linalg.norm(rmat)
+
 
 def process_amass():
     def _syn_acc(v):
@@ -34,6 +57,7 @@ def process_amass():
     # ji_mask = torch.tensor([18, 19, 1, 2, 15, 0])
     vi_mask = torch.tensor([1961, 5424, 1177, 4662, 411, 3021]) # TIP
     ji_mask = torch.tensor([18, 19, 4, 5, 15, 0])
+    x_coord_vi_mask = torch.tensor([1969, 5421, 1102, 4637, 250, 1782]) ##
     body_model = ParametricModel(config.og_smpl_model_path)
 
     try:
@@ -82,16 +106,38 @@ def process_amass():
         print('Synthesizing IMU accelerations and orientations')
         b = 0
         out_pose, out_shape, out_tran, out_joint, out_vrot, out_vacc = [], [], [], [], [], []
+        out_vrot_on_vertex = []
         for i, l in tqdm(list(enumerate(length))):
             if l <= 12: b += l; print('\tdiscard one sequence with length', l); continue
             p = math.axis_angle_to_rotation_matrix(pose[b:b + l]).view(-1, 24, 3, 3)
             grot, joint, vert = body_model.forward_kinematics(p, shape[i], tran[b:b + l], calc_mesh=True)
+
+            tj_sampled_rots = []
+            Nt = len(vert)
+            for t in tqdm(range(Nt)):
+                mesh = create_mesh(body_model.face, vert[t])
+
+                verts = torch.from_numpy( np.asarray(mesh.vertices) )
+                normals = np.asanyarray(mesh.vertex_normals)
+
+                j_sampled_rots = []
+                for vi, ji, x_coord_vi in zip(vi_mask, ji_mask, x_coord_vi_mask):
+                    x_vec = verts[x_coord_vi] - verts[vi]
+                    y_vec = normals[vi]
+
+                    sampled_rot = get_coordinate(x_vec, y_vec)
+
+                    j_sampled_rots.append(sampled_rot)
+                tj_sampled_rots.append( j_sampled_rots )
+            tj_sampled_rots = torch.from_numpy( np.asarray(tj_sampled_rots) )
+
             out_pose.append(pose[b:b + l].clone())  # N, 24, 3
             out_tran.append(tran[b:b + l].clone())  # N, 3
             out_shape.append(shape[i].clone())  # 10
             out_joint.append(joint[:, :24].contiguous().clone())  # N, 24, 3
             out_vacc.append(_syn_acc(vert[:, vi_mask]))  # N, 6, 3
             out_vrot.append(grot[:, ji_mask])  # N, 6, 3, 3
+            out_vrot_on_vertex.append(tj_sampled_rots)  # N, 6, 3, 3
             b += l
 
         print('Saving')
@@ -106,6 +152,7 @@ def process_amass():
         torch.save(out_joint, ds_dir / 'joint.pt')
         torch.save(out_vrot, ds_dir / 'vrot.pt')
         torch.save(out_vacc, ds_dir / 'vacc.pt')
+        torch.save(out_vrot_on_vertex, ds_dir / 'vrot_on_vertex.pt')
         print('Synthetic AMASS dataset is saved at', str(ds_dir))
 
 def process_dipimu(split="test"):
@@ -117,13 +164,13 @@ def process_dipimu(split="test"):
         acc = torch.cat((torch.zeros_like(acc[:1]), acc, torch.zeros_like(acc[:1])))
         return acc
     
-#     imu_mask = [7, 8, 9, 10, 0, 2]
-    imu_mask = [7, 8, 11, 12, 0, 2] # TIP
+    imu_mask = [7, 8, 9, 10, 0, 2]
     if split == "test":
         test_split = ['s_09', 's_10']
     else:
         test_split = ['s_01', 's_02', 's_03', 's_04', 's_05', 's_06', 's_07', 's_08']
     accs, oris, poses, trans, shapes, joints, vrots, vaccs = [], [], [], [], [], [], [], []
+    vrots_on_vertex = []
     
     body_model = ParametricModel(config.og_smpl_model_path)
     
@@ -132,6 +179,7 @@ def process_dipimu(split="test"):
     # ji_mask = torch.tensor([18, 19, 1, 2, 15, 0])
     vi_mask = torch.tensor([1961, 5424, 1177, 4662, 411, 3021]) # TIP
     ji_mask = torch.tensor([18, 19, 4, 5, 15, 0])
+    x_coord_vi_mask = torch.tensor([1969, 5421, 1102, 4637, 250, 1782]) ##
 
     for subject_name in test_split:
         for motion_name in os.listdir(os.path.join(config.raw_dip_path, subject_name)):
@@ -162,12 +210,33 @@ def process_dipimu(split="test"):
                 # forward kinematics to get the joint position
                 p = math.axis_angle_to_rotation_matrix(pose).view(-1, 24, 3, 3)
                 grot, joint, vert = body_model.forward_kinematics(p, shape, tran, calc_mesh=True)
+
+                tj_sampled_rots = []
+                Nt = len(vert)
+                for t in tqdm(range(Nt)):
+                    mesh = create_mesh(body_model.face, vert[t])
+
+                    verts = torch.from_numpy( np.asarray(mesh.vertices) )
+                    normals = np.asanyarray(mesh.vertex_normals)
+
+                    j_sampled_rots = []
+                    for vi, ji, x_coord_vi in zip(vi_mask, ji_mask, x_coord_vi_mask):
+                        x_vec = verts[x_coord_vi] - verts[vi]
+                        y_vec = normals[vi]
+
+                        sampled_rot = get_coordinate(x_vec, y_vec)
+
+                        j_sampled_rots.append(sampled_rot)
+                    tj_sampled_rots.append( j_sampled_rots )
+                tj_sampled_rots = torch.from_numpy( np.asarray(tj_sampled_rots) )
+
                 vacc = _syn_acc(vert[:, vi_mask])
                 vrot = grot[:, ji_mask]
                 
                 joints.append(joint)
                 vaccs.append(vacc)
                 vrots.append(vrot)
+                vrots_on_vertex.append(tj_sampled_rots)
             else:
                 print('DIP-IMU: %s/%s has too much nan! Discard!' % (subject_name, motion_name))
                 
@@ -182,10 +251,11 @@ def process_dipimu(split="test"):
     torch.save(vaccs, path_to_save / 'vacc.pt')
     torch.save(oris, path_to_save / 'oris.pt')
     torch.save(accs, path_to_save / 'accs.pt')
+    torch.save(vrots_on_vertex, path_to_save / 'vrot_on_vertex.pt')
     
     print('Preprocessed DIP-IMU dataset is saved at', path_to_save)
 
 if __name__ == '__main__':
-#     process_dipimu(split="test")
-#     process_dipimu(split="train")
+    process_dipimu(split="test")
+    process_dipimu(split="train")
     process_amass()
